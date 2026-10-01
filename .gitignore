@@ -1,0 +1,19 @@
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment
+.env
+.venv/
+env/
+venv/
+
+# Outputs (Let reviewers generate these locally)
+Outputs/*.csv
+Outputs/*.png
+
+# IDEs
+.vscode/
+.idea/
+*.swp
