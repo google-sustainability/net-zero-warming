@@ -12,6 +12,9 @@ Climate Pollutant (SLCP) mitigation with long-term Carbon Dioxide Removal (CDR).
   constrained parameters, species configs, and emissions data).
 * `Outputs/`: Directory where all generated figures (PNG) and intermediate
   data (CSV) are saved.
+* `Master.ipynb`: Jupyter notebook orchestrating all figure and table
+  calculations, including the custom scenario inputs used for Figures 2(a) and
+  2(b) in the manuscript.
 * `fair_utils.py`: Core utility functions, FaIR model wrappers, optimization
   solvers, and global constants.
 * `generate_temperature_responses_*.py`: Scripts to pre-calculate temperature
@@ -36,8 +39,14 @@ pip install -r requirements.txt
 
 ### Generate Final Manuscript Figures and Tables
 
+You can run the full replication workflow (including the custom GWP20 and
+ramped ex-ante CDR scenario inputs used for Figures 2(a) and 2(b) in the
+manuscript) interactively via `Master.ipynb`, or run the standalone scripts
+directly from the command line.
+
 These scripts run the iterative solvers to balance emissions with mitigation
-and produce Figure 2(a) and 2(b):
+(using default example inputs when run directly from the CLI, or custom inputs
+when called from `Master.ipynb` to produce Figures 2(a) and 2(b)):
 
 ```bash
 python run_calc_min_cdr.py
