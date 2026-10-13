@@ -17,3 +17,7 @@ Outputs/*.png
 .vscode/
 .idea/
 *.swp
+
+# Mac metadata
+.DS_Store
+**/.DS_Store
