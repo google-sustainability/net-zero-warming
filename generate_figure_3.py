@@ -15,64 +15,81 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Generates Figure 3 for multi-gas mitigation scenarios."""
+"""Generates Figure 3 demonstrating stacked mitigation schedules."""
 
 import os
 import fair_utils
+from matplotlib import ticker
 import matplotlib.pyplot as plt
 import numpy as np
 
 
 def execute_figure_3():
-  """Generates Figure 3 demonstrating multi-gas mitigation portfolios."""
-  # Example 1: 1 Gt CH4 mitigation in 2030, replaced by 1 Gt CDR in 2042.
-  scenario_data_1 = {
-      2030: {
-          'CO2 emissions': 1e9,
-          'Long-lived CDR': 0.0,
-          'CH4 mitigation': 1.0e9,
-      },
-      2042: {
-          'CO2 emissions': 0.0,
-          'Long-lived CDR': 1.0e9,
-          'CH4 mitigation': 0.0,
-      },
+  """Generates Figure 3 demonstrating stacked mitigation schedules."""
+
+  # Format: (Year, Mass in Gt CO2)
+  emissions = [
+      (2030, 1.0),
+      (2031, 1.0),
+      (2032, 0.5),
+  ]
+
+  # Format: (Issuance Year, Gas Type, Mass in Gt CO2e at GWP20)
+  mitigation_issuances = [
+      (2028, 'CH4', 0.2),
+      (2028, 'HFC-134a', 0.1),
+      (2029, 'CH4', 0.2),
+      (2029, 'HFC-134a', 0.1),
+      (2030, 'CH4', 0.2),
+      (2030, 'HFC-134a', 0.2),
+      # Neutralizing the 2031 emission addition
+      (2031, 'CH4', 0.5),
+      (2031, 'HFC-134a', 0.5),
+      # Neutralizing the 2032 emission addition
+      (2032, 'CH4', 0.3),
+      (2032, 'HFC-134a', 0.2),
+  ]
+
+  # Replacement Rules derived from Table 2
+  replacement_delays = {
+      'CH4': 12,  # CH4 must be replaced at latest 12 years after issuance
+      'HFC-134a': (
+          10  # HFC-134a must be replaced at latest 10 years after issuance
+      ),
   }
 
-  # Example 2: Phased CH4 mitigation in 2026/2027, replaced by CDR in
-  # 2037/2038/2039.
-  scenario_data_2 = {
-      2026: {
-          'CO2 emissions': 0.0,
-          'Long-lived CDR': 0.0,
-          'CH4 mitigation': 0.4e9,
-      },
-      2027: {
-          'CO2 emissions': 0.0,
-          'Long-lived CDR': 0.0,
-          'CH4 mitigation': 0.6e9,
-      },
-      2030: {
-          'CO2 emissions': 1e9,
-          'Long-lived CDR': 0.0,
-          'CH4 mitigation': 0.0,
-      },
-      2037: {
-          'CO2 emissions': 0.0,
-          'Long-lived CDR': 0.2e9,
-          'CH4 mitigation': 0.0,
-      },
-      2038: {
-          'CO2 emissions': 0.0,
-          'Long-lived CDR': 0.3e9,
-          'CH4 mitigation': 0.0,
-      },
-      2039: {
-          'CO2 emissions': 0.0,
-          'Long-lived CDR': 0.5e9,
-          'CH4 mitigation': 0.0,
-      },
-  }
+  co2_pulse = np.zeros(1000)
+  co2_pulse_no_cdr = np.zeros(1000)
+  ch4_pulse = np.zeros(1000)
+  hfc_pulse = np.zeros(1000)
+
+  # Apply Emissions
+  for em_yr, mass in emissions:
+    idx = em_yr - fair_utils.START_YEAR
+    if 0 <= idx < 1000:
+      co2_pulse[idx] += mass
+      co2_pulse_no_cdr[idx] += mass
+
+  # Apply Mitigation and CDR Replacements
+  for issue_yr, gas_type, mass in mitigation_issuances:
+    delay = replacement_delays.get(gas_type, 0)
+    replace_yr = issue_yr + delay
+
+    issue_idx = issue_yr - fair_utils.START_YEAR
+    replace_idx = replace_yr - fair_utils.START_YEAR
+
+    # SLCP issuance (negative pulse)
+    if 0 <= issue_idx < 1000:
+      if gas_type == 'CH4':
+        # Convert Gt CO2e to Mt CH4
+        ch4_pulse[issue_idx] -= (mass * 1000.0) / fair_utils.GWP20_CH4
+      elif gas_type == 'HFC-134a':
+        # Convert Gt CO2e to kt HFC-134a
+        hfc_pulse[issue_idx] -= (mass * 1000000.0) / fair_utils.GWP20_HFC
+
+    # Durable CDR replacement (negative CO2 pulse)
+    if 0 <= replace_idx < 1000:
+      co2_pulse[replace_idx] -= mass
 
   print('Running Baseline...')
   f_base = fair_utils.run_fair()
@@ -90,339 +107,232 @@ def execute_figure_3():
     df_q.columns = [f'p{int(col * 100):02d}' for col in df_q.columns]
     return df_q.reset_index()
 
-  def process_scenario(scenario_data):
-    years = sorted(list(scenario_data.keys()))
-    co2_pulse = np.zeros(1000)
-    co2_pulse_no_cdr = np.zeros(1000)
-    ch4_pulse = np.zeros(1000)
+  print('Running Emissions + Durable CDR...')
+  f_cdr = fair_utils.run_fair(co2_adj=co2_pulse)
+  t_cdr = f_cdr.temperature.sel(
+      scenario=fair_utils.SCENARIO, layer=0
+  ).squeeze(drop=True)
+  df_cdr = get_quantiles_df(t_cdr - t_base)
 
-    for year in years:
-      idx = int(year) - fair_utils.START_YEAR
-      if 0 <= idx < 1000:
-        co2_tons = scenario_data[year].get('CO2 emissions', 0.0)
-        cdr_tons = scenario_data[year].get('Long-lived CDR', 0.0)
-        ch4_tons_gwp20 = scenario_data[year].get('CH4 mitigation', 0.0)
+  print('Running Emissions + SLCP Mitigation...')
+  f_slcp = fair_utils.run_fair(
+      co2_adj=co2_pulse_no_cdr, ch4_adj=ch4_pulse, hfc_adj=hfc_pulse
+  )
+  t_slcp = f_slcp.temperature.sel(
+      scenario=fair_utils.SCENARIO, layer=0
+  ).squeeze(drop=True)
+  df_slcp = get_quantiles_df(t_slcp - t_base)
 
-        co2_gt = co2_tons * 1e-9
-        cdr_gt = cdr_tons * 1e-9
-        ch4_mt = (ch4_tons_gwp20 * 1e-6) / fair_utils.GWP20_CH4
+  print('Running Emissions + SLCP Mitigation + Durable CDR...')
+  f_all = fair_utils.run_fair(
+      co2_adj=co2_pulse, ch4_adj=ch4_pulse, hfc_adj=hfc_pulse
+  )
+  t_all = f_all.temperature.sel(
+      scenario=fair_utils.SCENARIO, layer=0
+  ).squeeze(drop=True)
+  df_all = get_quantiles_df(t_all - t_base)
 
-        co2_pulse[idx] += co2_gt
-        co2_pulse[idx] -= cdr_gt
-        co2_pulse_no_cdr[idx] += co2_gt
-        ch4_pulse[idx] -= ch4_mt
+  years_stack = np.arange(2025, 2060)
+  cum_emissions = np.zeros_like(years_stack, dtype=float)
+  ch4_active = np.zeros_like(years_stack, dtype=float)
+  hfc_active = np.zeros_like(years_stack, dtype=float)
+  cdr_active = np.zeros_like(years_stack, dtype=float)
 
-    f_adj_co2 = fair_utils.run_fair(co2_adj=co2_pulse)
-    t_adj_co2 = f_adj_co2.temperature.sel(
-        scenario=fair_utils.SCENARIO, layer=0
-    ).squeeze(drop=True)
-    temp_diff_co2 = t_adj_co2 - t_base
+  for em_yr, em_mass in emissions:
+    for i, yr in enumerate(years_stack):
+      if yr >= em_yr:
+        cum_emissions[i] += em_mass
 
-    f_adj_em_ch4 = fair_utils.run_fair(
-        co2_adj=co2_pulse_no_cdr, ch4_adj=ch4_pulse
-    )
-    t_adj_em_ch4 = f_adj_em_ch4.temperature.sel(
-        scenario=fair_utils.SCENARIO, layer=0
-    ).squeeze(drop=True)
-    temp_diff_em_ch4 = t_adj_em_ch4 - t_base
+  for issue_yr, gas_type, mass in mitigation_issuances:
+    delay = replacement_delays.get(gas_type, 0)
+    replace_yr = issue_yr + delay
 
-    f_adj_all = fair_utils.run_fair(co2_adj=co2_pulse, ch4_adj=ch4_pulse)
-    t_adj_all = f_adj_all.temperature.sel(
-        scenario=fair_utils.SCENARIO, layer=0
-    ).squeeze(drop=True)
-    temp_diff_all = t_adj_all - t_base
+    for i, yr in enumerate(years_stack):
+      if issue_yr <= yr < replace_yr:
+        if gas_type == 'CH4':
+          ch4_active[i] += mass
+        elif gas_type == 'HFC-134a':
+          hfc_active[i] += mass
+      elif yr >= replace_yr:
+        cdr_active[i] += mass
 
-    df_co2 = get_quantiles_df(temp_diff_co2)
-    df_em_ch4 = get_quantiles_df(temp_diff_em_ch4)
-    df_all = get_quantiles_df(temp_diff_all)
-
-    schedule_years = np.arange(fair_utils.START_YEAR, 2101)
-    ch4_arr = np.zeros_like(schedule_years, dtype=float)
-    cdr_arr = np.zeros_like(schedule_years, dtype=float)
-
-    for i, yr in enumerate(schedule_years):
-      if yr in scenario_data:
-        ch4_arr[i] = scenario_data[yr].get('CH4 mitigation', 0) / 1e9
-        cdr_arr[i] = scenario_data[yr].get('Long-lived CDR', 0) / 1e9
-
-    cum_ch4 = np.cumsum(ch4_arr)
-    cum_cdr = np.cumsum(cdr_arr)
-
-    return df_co2, df_em_ch4, df_all, schedule_years, cum_ch4, cum_cdr
-
-  print('Processing Example 1...')
-  res_1 = process_scenario(scenario_data_1)
-
-  print('Processing Example 2...')
-  res_2 = process_scenario(scenario_data_2)
+  stack_1 = ch4_active
+  stack_2 = stack_1 + hfc_active
+  stack_3 = stack_2 + cdr_active
 
   col_uncomp = '#E15759'  # Red
   col_ch4 = '#59A14F'  # Green
+  col_hfc = '#9467BD'  # Purple
   col_comp = '#0072B2'  # Blue
 
-  # 2x2 subplot layout with shared axes (equal height for all subplots)
-  _, axes = plt.subplots(
-      2,
-      2,
-      figsize=(14, 7),
-      sharex=True,
-      sharey='row',
-      gridspec_kw={'height_ratios': [3, 1]},
+  # Consistent aspect ratio and size with other 2-panel vertical plots
+  _, (ax1, ax2) = plt.subplots(
+      2, 1, figsize=(8, 7), sharex=True, gridspec_kw={'height_ratios': [3, 1]}
   )
-
-  ax1_1, ax1_2 = axes[0]  # Top row (Temperature)
-  ax2_1, ax2_2 = axes[1]  # Bottom row (Cumulative schedules)
 
   def style_axes(ax_obj):
     ax_obj.spines['top'].set_visible(False)
     ax_obj.spines['right'].set_visible(False)
-    ax_obj.tick_params(axis='both', which='major', labelsize=12)
+    ax_obj.tick_params(axis='y', which='major', labelsize=12)
 
-  for ax in axes.flat:
-    style_axes(ax)
+  style_axes(ax1)
+  style_axes(ax2)
 
-  # Helper function to plot the temperature panels
-  def plot_temperature_panel(ax, df_co2, df_em_ch4, df_all, panel_label):
-    time_col = df_co2.columns[0]
-    ax.axhline(0, color='gray', linestyle='-', linewidth=1.2, zorder=1)
+  time_col = df_cdr.columns[0]
+  ax1.axhline(0, color='gray', linestyle='-', linewidth=1.2, zorder=1)
 
-    ax.plot(
-        df_co2[time_col],
-        df_co2['p50'] * 1000,
-        color=col_uncomp,
-        label='Emissions + Durable CDR',
-        linewidth=2.5,
-        zorder=3,
-    )
-    ax.fill_between(
-        df_co2[time_col],
-        df_co2['p05'] * 1000,
-        df_co2['p95'] * 1000,
-        color=col_uncomp,
-        alpha=0.15,
-        zorder=2,
-    )
-
-    ax.plot(
-        df_em_ch4[time_col],
-        df_em_ch4['p50'] * 1000,
-        color=col_ch4,
-        label='Emissions + CH₄ Mitigation',
-        linewidth=2.5,
-        zorder=4,
-    )
-    ax.fill_between(
-        df_em_ch4[time_col],
-        df_em_ch4['p05'] * 1000,
-        df_em_ch4['p95'] * 1000,
-        color=col_ch4,
-        alpha=0.15,
-        zorder=3,
-    )
-
-    ax.plot(
-        df_all[time_col],
-        df_all['p50'] * 1000,
-        color=col_comp,
-        label='Emissions + CH₄ Mitigation + Durable CDR',
-        linewidth=2.5,
-        zorder=5,
-    )
-    ax.fill_between(
-        df_all[time_col],
-        df_all['p05'] * 1000,
-        df_all['p95'] * 1000,
-        color=col_comp,
-        alpha=0.15,
-        zorder=4,
-    )
-
-    # Panel label (a)/(b) in the top-left corner, non-bold
-    ax.text(
-        0.02,
-        0.95,
-        panel_label,
-        transform=ax.transAxes,
-        fontsize=14,
-        weight='normal',
-        va='top',
-        ha='left',
-        zorder=10,
-    )
-
-  # Plot top row
-  plot_temperature_panel(ax1_1, res_1[0], res_1[1], res_1[2], '(a)')
-  plot_temperature_panel(ax1_2, res_2[0], res_2[1], res_2[2], '(b)')
-
-  ax1_1.set_ylabel('Δ Temperature (10⁻³ °C)', fontsize=12, weight='medium')
-
-  # Legend moved to ax1_1 (top left)
-  ax1_1.legend(frameon=False, loc='lower right', fontsize=10)
-
-  # Helper function to plot the cumulative schedule panels
-  def plot_schedule_panel(
-      ax, schedule_years, cum_ch4, cum_cdr, ch4_anno, cdr_anno, show_labels=True
-  ):
-    emission_yr = 2030
-    emission_mass = 1.0  # 1 Gt CO2
-
-    # Plot CO2 emission bar with the same color/alpha as the red shaded area
-    ax.bar(
-        emission_yr,
-        emission_mass,
-        width=0.5,
-        color=col_uncomp,
-        alpha=0.6,
-        zorder=3,
-    )
-
-    # Plot mitigation lines with different opaqueness so overlaps are visible
-    ax.step(
-        schedule_years,
-        cum_ch4,
-        where='post',
-        color='gray',
-        linestyle='-',
-        linewidth=2.5,
-        alpha=0.4,
-        zorder=4,
-    )
-    ax.step(
-        schedule_years,
-        cum_cdr,
-        where='post',
-        color='gray',
-        linestyle='-',
-        linewidth=2.5,
-        alpha=1.0,
-        zorder=5,
-    )
-
-    # Fill areas under the lines with distinct transparent grays
-    ax.fill_between(
-        schedule_years,
-        0,
-        cum_ch4,
-        step='post',
-        color='gray',
-        alpha=0.1,
-        zorder=2,
-    )
-    ax.fill_between(
-        schedule_years,
-        0,
-        cum_cdr,
-        step='post',
-        color='gray',
-        alpha=0.3,
-        zorder=2,
-    )
-
-    ax.axhline(0, color='gray', linestyle='-', linewidth=1.2, zorder=1)
-
-    # Only render labels and text if show_labels is True
-    if show_labels:
-      arrow_kwargs = dict(arrowstyle='->', color='black', lw=1.2)
-
-      # Point to the left edge of the emission bar (2029.75) from the left
-      ax.annotate(
-          'CO₂\nEmission',
-          xy=(2029.75, 0.25),
-          xytext=(2028.5, 0.25),
-          arrowprops=arrow_kwargs,
-          fontsize=11,
-          va='center',
-          ha='right',
-          zorder=10,
-      )
-
-      ax.annotate(
-          'CH₄ Mitigation',
-          xy=ch4_anno['xy'],
-          xytext=ch4_anno['xytext'],
-          arrowprops=arrow_kwargs,
-          fontsize=11,
-          va=ch4_anno['va'],
-          ha=ch4_anno['ha'],
-          zorder=10,
-      )
-
-      ax.annotate(
-          'Durable CDR',
-          xy=cdr_anno['xy'],
-          xytext=cdr_anno['xytext'],
-          arrowprops=arrow_kwargs,
-          fontsize=11,
-          va=cdr_anno['va'],
-          ha=cdr_anno['ha'],
-          zorder=10,
-      )
-
-  # Define specific annotation coordinates to point perfectly to the lines
-  # for Example 1
-  ch4_anno_1 = {
-      'xy': (2035, 1.0),
-      'xytext': (2035, 0.65),
-      'va': 'top',
-      'ha': 'center',
-  }
-  cdr_anno_1 = {
-      'xy': (2042, 0.5),
-      'xytext': (2044, 0.5),
-      'va': 'center',
-      'ha': 'left',
-  }
-
-  # Plot bottom left panel (with labels)
-  plot_schedule_panel(
-      ax2_1,
-      res_1[3],
-      res_1[4],
-      res_1[5],
-      ch4_anno_1,
-      cdr_anno_1,
-      show_labels=True,
+  # Red: Emissions + CDR
+  ax1.plot(
+      df_cdr[time_col],
+      df_cdr['p50'] * 1000,
+      color=col_uncomp,
+      label='Emissions + Durable CDR',
+      linewidth=2.5,
+      zorder=3,
+  )
+  ax1.fill_between(
+      df_cdr[time_col],
+      df_cdr['p05'] * 1000,
+      df_cdr['p95'] * 1000,
+      color=col_uncomp,
+      alpha=0.15,
+      zorder=2,
   )
 
-  # Define specific annotation coordinates for Example 2
-  ch4_anno_2 = {
-      'xy': (2033, 1.0),
-      'xytext': (2033, 0.65),
-      'va': 'top',
-      'ha': 'center',
-  }
-  cdr_anno_2 = {
-      'xy': (2038.5, 0.5),
-      'xytext': (2041.5, 0.5),
-      'va': 'center',
-      'ha': 'left',
-  }
-
-  # Plot bottom right panel (without labels)
-  plot_schedule_panel(
-      ax2_2,
-      res_2[3],
-      res_2[4],
-      res_2[5],
-      ch4_anno_2,
-      cdr_anno_2,
-      show_labels=False,
+  # Green: Emissions + SLCP
+  ax1.plot(
+      df_slcp[time_col],
+      df_slcp['p50'] * 1000,
+      color=col_ch4,
+      label='Emissions + SLCP Mitigation',
+      linewidth=2.5,
+      zorder=4,
+  )
+  ax1.fill_between(
+      df_slcp[time_col],
+      df_slcp['p05'] * 1000,
+      df_slcp['p95'] * 1000,
+      color=col_ch4,
+      alpha=0.15,
+      zorder=3,
   )
 
-  ax2_1.set_xlabel('Year', fontsize=12, weight='medium')
-  ax2_2.set_xlabel('Year', fontsize=12, weight='medium')
-  ax2_1.set_ylabel(
-      'Cumulative Mitigation\n(Gt CO₂e, GWP20)', fontsize=12, weight='medium'
+  # Blue: Emissions + SLCP + CDR
+  ax1.plot(
+      df_all[time_col],
+      df_all['p50'] * 1000,
+      color=col_comp,
+      label='Emissions + SLCP Mitigation\n+ Durable CDR',
+      linewidth=2.5,
+      zorder=5,
+  )
+  ax1.fill_between(
+      df_all[time_col],
+      df_all['p05'] * 1000,
+      df_all['p95'] * 1000,
+      color=col_comp,
+      alpha=0.15,
+      zorder=4,
   )
 
-  # Set limits
-  for ax in axes.flat:
-    ax.set_xlim(2025, 2050)
-  ax2_1.set_ylim(0, 1.1)
+  ax1.set_ylabel('Δ Temperature (10⁻³ °C)', fontsize=12, weight='medium')
 
-  # Tidy layout
+  # Ensure there is enough vertical space for the legend
+  top_y = max(df_cdr['p95'].max() * 1000, df_all['p95'].max() * 1000)
+  ax1.set_ylim(
+      bottom=ax1.get_ylim()[0], top=max(top_y * 1.5, ax1.get_ylim()[1])
+  )
+
+  ax1.legend(frameon=False, loc='upper right', fontsize=10)
+  ax1.text(
+      0.02,
+      0.95,
+      '(a)',
+      transform=ax1.transAxes,
+      fontsize=14,
+      weight='normal',
+      va='top',
+      ha='left',
+      zorder=10,
+  )
+
+  ax2.axhline(0, color='gray', linestyle='-', linewidth=1.2, zorder=1)
+
+  # Target Line
+  ax2.step(
+      years_stack,
+      cum_emissions,
+      where='post',
+      color='gray',
+      linestyle='-',
+      linewidth=2.5,
+      zorder=7,
+      label='Cumulative CO₂ Emissions',
+  )
+
+  # Shaded Portfolio (no solid outlines, formatted like temperature
+  # fill_between)
+  ax2.fill_between(
+      years_stack,
+      0,
+      stack_1,
+      step='post',
+      color=col_ch4,
+      alpha=0.15,
+      label='CH₄ Mitigation',
+      zorder=2,
+  )
+  ax2.fill_between(
+      years_stack,
+      stack_1,
+      stack_2,
+      step='post',
+      color=col_hfc,
+      alpha=0.15,
+      label='HFC-134a Mitigation',
+      zorder=2,
+  )
+  ax2.fill_between(
+      years_stack,
+      stack_2,
+      stack_3,
+      step='post',
+      color=col_comp,
+      alpha=0.15,
+      label='Durable CDR',
+      zorder=2,
+  )
+
+  ax2.set_ylabel(
+      'Emissions and Mitigation\n(Gt CO₂e, GWP20)', fontsize=12, weight='medium'
+  )
+  ax2.set_xlabel('Year', fontsize=12, weight='medium')
+
+  ax2.legend(frameon=False, loc='lower right', fontsize=10, ncol=1)
+  ax2.text(
+      0.02,
+      0.95,
+      '(b)',
+      transform=ax2.transAxes,
+      fontsize=14,
+      weight='normal',
+      va='top',
+      ha='left',
+      zorder=10,
+  )
+
+  # Focus the x-axis around the active mitigation window
+  ax2.set_xlim(2025, 2055)
+  ax2.xaxis.set_major_locator(ticker.MaxNLocator(integer=True))
+  ax2.tick_params(axis='x', labelsize=11, rotation=0)
+
+  # Adjust Y limits dynamically with a higher multiplier (1.8) to leave room
+  # for the legend in the shorter panel
+  max_y = max(np.max(cum_emissions), np.max(stack_3)) * 1.1
+  ax2.set_ylim(0, max_y)
+
   plt.tight_layout()
-  plt.subplots_adjust(hspace=0.08, wspace=0.1)
+  plt.subplots_adjust(hspace=0.08)
 
   # Save logic
   os.makedirs(fair_utils.TARGET_DIR, exist_ok=True)
@@ -430,6 +340,7 @@ def execute_figure_3():
   full_path = os.path.join(fair_utils.TARGET_DIR, filename)
   plt.savefig(full_path, dpi=300, bbox_inches='tight', facecolor='white')
   print(f'Figure successfully saved to: {full_path}')
+  plt.show()
 
 
 if __name__ == '__main__':
