@@ -1,4 +1,4 @@
-# Sustained Neutralization of the Warming Response to CO₂ Emissions
+# Net-Zero Warming
 
 This repository contains the Python code and configuration files required to
 reproduce the analyses, tables, and figures for *Sustained Neutralization of
