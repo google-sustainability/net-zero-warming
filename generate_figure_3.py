@@ -15,7 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Generates Figure 4 demonstrating stacked mitigation schedules."""
+"""Generates Figure 3 demonstrating stacked mitigation schedules."""
 
 import os
 import fair_utils
@@ -24,8 +24,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-def execute_figure_4():
-  """Generates Figure 4 demonstrating stacked mitigation schedules."""
+def execute_figure_3():
+  """Generates Figure 3 demonstrating stacked mitigation schedules."""
 
   # Format: (Year, Mass in Gt CO2)
   emissions = [
@@ -54,7 +54,7 @@ def execute_figure_4():
   replacement_delays = {
       'CH4': 12,  # CH4 must be replaced at latest 12 years after issuance
       'HFC-134a': (
-          10  # HFC-134a must be replaced at latest 11 years after issuance
+          10  # HFC-134a must be replaced at latest 10 years after issuance
       ),
   }
 
@@ -336,7 +336,7 @@ def execute_figure_4():
 
   # Save logic
   os.makedirs(fair_utils.TARGET_DIR, exist_ok=True)
-  filename = 'Figure_4.png'
+  filename = 'Figure_3.png'
   full_path = os.path.join(fair_utils.TARGET_DIR, filename)
   plt.savefig(full_path, dpi=300, bbox_inches='tight', facecolor='white')
   print(f'Figure successfully saved to: {full_path}')
@@ -344,4 +344,4 @@ def execute_figure_4():
 
 
 if __name__ == '__main__':
-  execute_figure_4()
+  execute_figure_3()
